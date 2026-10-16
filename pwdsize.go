@@ -10,7 +10,7 @@ import(
 )
 
 type dirSizeMtx struct {
-	mtx sync.Mutex
+	mtx *sync.Mutex
 	size int64
 }
 
@@ -43,7 +43,7 @@ func main() {
 	root := os.Args[1]
 	files, err := os.ReadDir(root)
 	if err != nil {
-		fmt.Println("Not found", root)
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
@@ -54,8 +54,13 @@ func main() {
 		fpath := filepath.Join(root, file.Name())
 
 		if file.IsDir() {
+			_, err := os.ReadDir(fpath)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
 			dsizes[fpath] = &dirSizeMtx{
-				mtx: sync.Mutex{},
+				mtx: &sync.Mutex{},
 				size: 0,
 			}
 			wg.Add(1)
@@ -65,8 +70,8 @@ func main() {
 
 		info, err := file.Info()
 		if err != nil {
-			fmt.Println("Failed to get file info", fpath)
-			os.Exit(1)
+			fmt.Println(err)
+			continue
 		}
 
 		fsizes[fpath] += info.Size()
@@ -95,11 +100,12 @@ func main() {
 func calcDirSize(ret *dirSizeMtx, dir string, wg *sync.WaitGroup) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		fmt.Println("Not found", dir)
-		os.Exit(1)
+		fmt.Println(err)
+		wg.Done()
+		return
 	}
 
-	ret.mtx.Lock()
+	size := int64(0)
 	for _, file := range files {
 		fpath := filepath.Join(dir, file.Name())
 
@@ -111,12 +117,15 @@ func calcDirSize(ret *dirSizeMtx, dir string, wg *sync.WaitGroup) {
 
 		info, err := file.Info() 
 		if err != nil {
-			fmt.Println("Failed to get file info", fpath)
-			os.Exit(1)
+			fmt.Println(err)
+			continue
 		}
 
-		ret.size += info.Size()
+		size += info.Size()
 	}
+
+	ret.mtx.Lock()
+	ret.size += size
 	ret.mtx.Unlock()
 
 	wg.Done()
