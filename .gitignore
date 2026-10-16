@@ -1,0 +1,39 @@
+# 用途：Go言語プロジェクト用の標準的な.gitignore
+
+# --- Go 関連の成果物 ---
+# コンパイル済みのバイナリ・実行ファイル
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 独自のビルド成果物（例: プロジェクト名でビルドしたバイナリ）
+/pwdsize
+
+# テストで生成されるファイル
+*.test
+*.out
+*.prof
+
+# --- 開発ツール・エディタ関連 ---
+# Goのデバッガ（Delve）の成果物
+__debug_bin
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# IntelliJ IDEA / GoLand
+.idea/
+
+# macOS 固有のシステムファイル
+.DS_Store
+
+# Windows 固有のシステムファイル
+Thumbs.db
+
+# --- 環境変数・機密情報 ---
+# ローカル開発用の環境変数ファイル（APIキーなどを含めるためGit管理外にする）
+.env
+.env.local
