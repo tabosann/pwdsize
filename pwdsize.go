@@ -10,7 +10,7 @@ import(
 )
 
 type dirSizeMtx struct {
-	mtx *sync.Mutex
+	mtx sync.Mutex
 	size int64
 }
 
@@ -60,7 +60,7 @@ func main() {
 				continue
 			}
 			dsizes[fpath] = &dirSizeMtx{
-				mtx: &sync.Mutex{},
+				mtx: sync.Mutex{},
 				size: 0,
 			}
 			wg.Add(1)
