@@ -151,10 +151,9 @@ func humanSize(bytes int64) string {
 	units := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
 	
 	// 適切な単位のインデックスを計算
+	// エグザバイト(EiB)以上を丸める安全策
 	exp := int(math.Log(float64(bytes)) / math.Log(float64(unit)))
-	if exp > len(units) {
-		exp = len(units) // エグザバイト(EiB)以上を丸める安全策
-	}
+	exp = min(exp, len(units))
 
 	value := float64(bytes) / math.Pow(float64(unit), float64(exp))
 
