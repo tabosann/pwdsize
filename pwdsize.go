@@ -6,7 +6,6 @@ import(
 	"math"
 	"sort"
 	"sync"
-	"time"
 	"strings"
 	"path/filepath"
 )
@@ -24,9 +23,11 @@ func generateDirSizeRec(
 	dir string,
 	wg *sync.WaitGroup,
 ) {
+	defer wg.Done()
+
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		fmt.Println(err)
+		return
 	}
 
 	size := int64(0)
@@ -40,13 +41,12 @@ func generateDirSizeRec(
 
 		info, err := file.Info()
 		if err != nil {
-			fmt.Println(err)
+			continue
 		}
 
 		size += info.Size()
 	}
 	sizes <- size
-	wg.Done()
 }
 
 func generateSizes(quit <-chan int, dir string) <-chan int64 {
@@ -54,9 +54,11 @@ func generateSizes(quit <-chan int, dir string) <-chan int64 {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
+
 		files, err := os.ReadDir(dir)
 		if err != nil {
-			fmt.Println(err)
+			return
 		}
 
 		size := int64(0)
@@ -70,13 +72,12 @@ func generateSizes(quit <-chan int, dir string) <-chan int64 {
 
 			info, err := file.Info()
 			if err != nil {
-				fmt.Println(err)
+				continue
 			}
 
 			size += info.Size()
 		}
 		sizes <- size
-		wg.Done()
 	}()
 
 	go func() {
@@ -159,7 +160,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	start := time.Now()
 
 	root := os.Args[1]
 	files, err := os.ReadDir(root)
@@ -187,7 +187,7 @@ func main() {
 
 		info, err := file.Info()
 		if err != nil {
-			fmt.Println(err)
+			continue
 		}
 
 		sizeList = append(sizeList, FileSize{
@@ -200,6 +200,4 @@ func main() {
 
 	result := sortSize(quit, sizeList...)
 	fmt.Println(<-result)
-
-	fmt.Println(time.Since(start))
 }
