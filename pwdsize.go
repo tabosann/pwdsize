@@ -1,137 +1,138 @@
 package main
 
 import(
-	"fmt"
 	"os"
-	"path/filepath"
-	"sync"
+	"fmt"
 	"math"
 	"sort"
+	"sync"
+	"time"
+	"strings"
+	"path/filepath"
 )
 
-type dirSizeMtx struct {
-	mtx sync.Mutex
+type FileSize struct {
+	path string
 	size int64
+	isDir bool
+	sizeCh <-chan int64
 }
 
-// マップの値をソートする際に必要
-type mapPair struct {
-	key string
-	val int64
-}
-
-// マップの値を降順でソートするインタフェース
-type sortMapValD []mapPair
-func (p sortMapValD) Len() int {
-	return len(p)
-
-}
-func (p sortMapValD) Less(i, j int) bool {
-	return p[i].val > p[j].val
-
-}
-func (p sortMapValD) Swap(i, j int) {
-	p[i], p[j] = p[j], p[i]
-}
-
-func main() {
-	if len(os.Args) != 2 {
-		fmt.Printf("%s <root dir>\n", os.Args[0])
-		os.Exit(1)
-	}
-
-	root := os.Args[1]
-	files, err := os.ReadDir(root)
+func generateDirSizeRec(
+	quit <-chan int,
+	sizes chan int64,
+	dir string,
+	wg *sync.WaitGroup,
+) {
+	files, err := os.ReadDir(dir)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
 	}
 
-	wg := sync.WaitGroup{}
-	fsizes := make(map[string]int64)
-	dsizes := make(map[string]*dirSizeMtx)
+	size := int64(0)
 	for _, file := range files {
-		fpath := filepath.Join(root, file.Name())
-
 		if file.IsDir() {
-			_, err := os.ReadDir(fpath)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-			dsizes[fpath] = &dirSizeMtx{
-				mtx: sync.Mutex{},
-				size: 0,
-			}
+			fpath := filepath.Join(dir, file.Name())
 			wg.Add(1)
-			go calcDirSize(dsizes[fpath], fpath, &wg)
+			go generateDirSizeRec(quit, sizes, fpath, wg)
 			continue
 		}
 
 		info, err := file.Info()
 		if err != nil {
 			fmt.Println(err)
-			continue
-		}
-
-		fsizes[fpath] += info.Size()
-	}
-
-	wg.Wait()
-
-	i := 0
-	pairs := make(sortMapValD, len(fsizes) + len(dsizes))
-	for k, v := range fsizes {
-		pairs[i] = mapPair{ fmt.Sprintf("  %s", k), v }
-		i++
-	}
-	for k, v := range dsizes {
-		pairs[i] = mapPair{ fmt.Sprintf("* %s\\", k), v.size }
-		i++
-	}
-
-	sort.Sort(pairs)
-
-	for _, v := range pairs {
-		fmt.Printf("%s %s\n", humanSize(v.val), v.key)
-	}
-}
-
-func calcDirSize(ret *dirSizeMtx, dir string, wg *sync.WaitGroup) {
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		fmt.Println(err)
-		wg.Done()
-		return
-	}
-
-	size := int64(0)
-	for _, file := range files {
-		fpath := filepath.Join(dir, file.Name())
-
-		if file.IsDir() {
-			wg.Add(1)
-			go calcDirSize(ret, fpath, wg)
-			continue
-		}
-
-		info, err := file.Info() 
-		if err != nil {
-			fmt.Println(err)
-			continue
 		}
 
 		size += info.Size()
 	}
-
-	ret.mtx.Lock()
-	ret.size += size
-	ret.mtx.Unlock()
-
+	sizes <- size
 	wg.Done()
 }
 
-// humanSize はバイトサイズを人間が見やすい文字列に変換します。
+func generateSizes(quit <-chan int, dir string) <-chan int64 {
+	sizes := make(chan int64)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		size := int64(0)
+		for _, file := range files {
+			if file.IsDir() {
+				fpath := filepath.Join(dir, file.Name())
+				wg.Add(1)
+				go generateDirSizeRec(quit, sizes, fpath, &wg)
+				continue
+			}
+
+			info, err := file.Info()
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			size += info.Size()
+		}
+		sizes <- size
+		wg.Done()
+	}()
+
+	go func() {
+		// 全ゴルーチンが完了してから閉じる
+		wg.Wait()
+		close(sizes)
+	}()
+
+	return sizes
+}
+
+func sortSize(quit <-chan int, sizeList ...FileSize) <-chan string {
+	output := make(chan string)
+	go func() {
+		defer close(output)
+
+		for i, e := range sizeList {
+			if !e.isDir {
+				// ファイルサイズはすでに分かっているのでスキップ
+				continue
+			}
+
+			// ディレクトリサイズの算出に入る
+			var size int64
+			ok := true
+			for ok {
+				select {
+				case size, ok = <-sizeList[i].sizeCh:
+					if ok {
+						sizeList[i].size += size
+					}
+				case <-quit:
+					ok = false
+				}
+			}
+		}
+
+		// サイズの昇順にソート
+		sort.Slice(sizeList, func(a, b int) bool {
+			return sizeList[a].size > sizeList[b].size
+		})
+
+		strList := make([]string, len(sizeList))
+		for i, e := range sizeList {
+			if e.isDir {
+				strList[i] = fmt.Sprintf("%s * %s\\", humanSize(e.size), e.path)
+			} else {
+				strList[i] = fmt.Sprintf("%s   %s", humanSize(e.size), e.path)
+			}
+		}
+
+		output <- strings.Join(strList, "\n")
+	}()
+	return output
+}
+
 func humanSize(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -150,4 +151,55 @@ func humanSize(bytes int64) string {
 	value := float64(bytes) / math.Pow(float64(unit), float64(exp))
 
 	return fmt.Sprintf("%8.3f %s", value, units[exp-1])
+}
+
+func main() {
+	if len(os.Args) != 2 {
+		fmt.Printf("%s <root dir>\n", os.Args[0])
+		os.Exit(1)
+	}
+
+	start := time.Now()
+
+	root := os.Args[1]
+	files, err := os.ReadDir(root)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	sizeList := make([]FileSize, 0)
+	quit := make(chan int)
+
+	for _, file := range files {
+		fpath := filepath.Join(root, file.Name())
+
+		if file.IsDir() {
+			sizeList = append(sizeList, FileSize{
+				path: fpath,
+				size: int64(0),
+				isDir: true,
+				sizeCh: generateSizes(quit, fpath),
+			})
+
+			continue
+		}
+
+		info, err := file.Info()
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		sizeList = append(sizeList, FileSize{
+			path: fpath,
+			size: info.Size(),
+			isDir: false,
+			sizeCh: nil,
+		})
+	}
+
+	result := sortSize(quit, sizeList...)
+	fmt.Println(<-result)
+
+	fmt.Println(time.Since(start))
 }
