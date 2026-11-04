@@ -53,7 +53,7 @@ func generateSizes(quit <-chan int, dir string) <-chan int64 {
 	sizes := make(chan int64)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	go func() {
+	wg.Go(func () {
 		defer wg.Done()
 
 		files, err := os.ReadDir(dir)
@@ -78,7 +78,7 @@ func generateSizes(quit <-chan int, dir string) <-chan int64 {
 			size += info.Size()
 		}
 		sizes <- size
-	}()
+	})
 
 	go func() {
 		// 全ゴルーチンが完了してから閉じる
@@ -94,6 +94,7 @@ func sortSize(quit <-chan int, sizeList ...FileSize) <-chan string {
 	go func() {
 		defer close(output)
 
+		wg := sync.WaitGroup{}
 		for i, e := range sizeList {
 			if !e.isDir {
 				// ファイルサイズはすでに分かっているのでスキップ
@@ -101,19 +102,25 @@ func sortSize(quit <-chan int, sizeList ...FileSize) <-chan string {
 			}
 
 			// ディレクトリサイズの算出に入る
-			var size int64
-			ok := true
-			for ok {
-				select {
-				case size, ok = <-sizeList[i].sizeCh:
-					if ok {
-						sizeList[i].size += size
+			wg.Add(1)
+			wg.Go(func () {
+				defer wg.Done()
+
+				var size int64
+				ok := true
+				for ok {
+					select {
+					case size, ok = <-sizeList[i].sizeCh:
+						if ok {
+							sizeList[i].size += size
+						}
+					case <-quit:
+						ok = false
 					}
-				case <-quit:
-					ok = false
 				}
-			}
+			})
 		}
+		wg.Wait()
 
 		// サイズの昇順にソート
 		sort.Slice(sizeList, func(a, b int) bool {
